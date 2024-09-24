@@ -1,0 +1,19 @@
+apiVersion: network.kubesphere.io/v1alpha2
+kind: Eip
+metadata:
+  name: eip-sample-layer2-announcer
+  # There are three ways to assign the specific layer2 announcer.
+  # 1. Assign the Node Name by labels.layer2AnnouncerNode
+  labels:
+      layer2AnnouncerNode: pc2
+  # 2. Assign the Node MAC address by annotations.layer2AnnouncerMAC
+  # annotations:
+  #     layer2AnnouncerMAC: "00:00:00:00:00:00"
+  # 3. Assign the Node IP by labels.layer2AnnouncerIP
+  # labels:
+  #     layer2AnnouncerIP: 10.10.30.3
+spec:
+  address: 10.10.30.13-10.10.30.14
+  protocol: layer2
+  #The interface must be specified when the protocol is layer2.
+  interface: eth0

@@ -88,33 +88,51 @@ func (l *layer2Speaker) SetBalancer(ip string, clusterNodes []corev1.Node) error
 			}
 
 			nodes := []string{}
-			for _, n := range clusterNodes {
-				if _, exist := member[n.GetName()]; exist {
-					nodes = append(nodes, n.GetName())
+			if exist, layer2AssignedNodeName, err := l.GetEIPAnnouncer(a.(*arpAnnouncer), ip); err != nil {
+				klog.Warning(err)
+			} else {
+				if exist {
+					if layer2AssignedNodeName != "" {
+						if _, exist := member[layer2AssignedNodeName]; exist {
+							nodes = append(nodes, layer2AssignedNodeName)
+						} else {
+							klog.Warningf("The assigned node: %s doesn't exist", layer2AssignedNodeName)
+						}
+					}
+				} else {
+					for _, n := range clusterNodes {
+						if _, exist := member[n.GetName()]; exist {
+							nodes = append(nodes, n.GetName())
+						}
+					}
+
+					if len(nodes) == 0 {
+						klog.Warningf("no suitable nodes to participate in the announced election.")
+						return nil
+					}
+
+					klog.Infof("candidates: [%s]", strings.Join(nodes, ","))
+					// Sort the slice by the hash of node + load balancer ips. This
+					// produces an ordering of ready nodes that is unique to all the services
+					// with the same ip.
+					sort.Slice(nodes, func(i, j int) bool {
+						hi := sha256.Sum256([]byte(nodes[i] + "#" + ip))
+						hj := sha256.Sum256([]byte(nodes[j] + "#" + ip))
+
+						return bytes.Compare(hi[:], hj[:]) < 0
+					})
 				}
 			}
 
-			if len(nodes) == 0 {
-				klog.Warningf("no suitable nodes to participate in the announced election.")
+			if len(nodes) > 0 {
+				klog.Infof("[%s] wins the right to announce the IP address %s", nodes[0], ip)
+				if nodes[0] != util.GetNodeName() {
+					return nil
+				}
+				return a.AddAnnouncedIP(net.ParseIP(ip))
+			} else {
 				return nil
 			}
-
-			klog.Infof("candidates: [%s]", strings.Join(nodes, ","))
-			// Sort the slice by the hash of node + load balancer ips. This
-			// produces an ordering of ready nodes that is unique to all the services
-			// with the same ip.
-			sort.Slice(nodes, func(i, j int) bool {
-				hi := sha256.Sum256([]byte(nodes[i] + "#" + ip))
-				hj := sha256.Sum256([]byte(nodes[j] + "#" + ip))
-
-				return bytes.Compare(hi[:], hj[:]) < 0
-			})
-
-			klog.Infof("[%s] wins the right to announce the IP address %s", nodes[0], ip)
-			if nodes[0] != util.GetNodeName() {
-				return nil
-			}
-			return a.AddAnnouncedIP(net.ParseIP(ip))
 		}
 	}
 
@@ -157,7 +175,8 @@ func (l *layer2Speaker) ConfigureWithEIP(config speaker.Config, deleted bool) er
 	}
 
 	if err := speaker.ValidateInterface(netif, config.IPRange); err != nil {
-		return err
+		klog.Warning(err)
+		//return err
 	}
 
 	if deleted {
@@ -213,4 +232,43 @@ func (l *layer2Speaker) unregisterAllAnnouncers() {
 	}
 
 	l.announcers = map[string]Announcer{}
+}
+
+func (l *layer2Speaker) GetEIPAnnouncer(announcer *arpAnnouncer, ip string) (bool, string, error) {
+	eipList := &v1alpha2.EipList{}
+	err := l.client.RESTClient().Get().AbsPath("/apis/network.kubesphere.io/v1alpha2/eips").Do(context.Background()).Into(eipList)
+	if err != nil {
+		return false, "", err
+	}
+	for _, eip := range eipList.Items {
+		addr, err := iprange.ParseRange(eip.Spec.Address)
+		if err != nil {
+			return false, "", err
+		}
+		if addr.Contains(net.ParseIP(ip)) {
+			if layer2AnnouncerNode, exist := eip.Labels["layer2AnnouncerNode"]; exist {
+				klog.Infof("EIP layer2AnnouncerNode is: %s", layer2AnnouncerNode)
+				return true, layer2AnnouncerNode, nil
+			} else if layer2AnnouncerMAC, exist := eip.Annotations["layer2AnnouncerMAC"]; exist {
+				klog.Infof("EIP layer2AnnouncerMAC is: %s", layer2AnnouncerMAC)
+				assignedMac, err := net.ParseMAC(layer2AnnouncerMAC)
+				if err != nil {
+					return true, "", fmt.Errorf("invalid MAC address: %s", layer2AnnouncerMAC)
+				}
+				if bytes.Equal(announcer.intf.HardwareAddr, assignedMac) {
+					return true, util.GetNodeName(), nil
+				} else {
+					return true, "", nil
+				}
+			} else if layer2AnnouncerIP, exist := eip.Labels["layer2AnnouncerIP"]; exist {
+				klog.Infof("EIP layer2AnnouncerIP is %s", layer2AnnouncerIP)
+				if len(announcer.addrs) > 0 && announcer.addrs[0].IPNet.IP.String() == layer2AnnouncerIP {
+					return true, util.GetNodeName(), nil
+				} else {
+					return true, "", nil
+				}
+			}
+		}
+	}
+	return false, "", nil
 }
