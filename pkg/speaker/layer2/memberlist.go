@@ -94,45 +94,40 @@ func (l *layer2Speaker) SetBalancer(ip string, clusterNodes []corev1.Node) error
 			}
 
 			nodes := []string{}
-			exist, eip, err := l.isEIPAnnounerExist(ip)
+
+			layer2AssignedNodeName, err := l.getEIPAnnouncer(a.(*arpAnnouncer), ip)
 			if err != nil {
 				klog.Warning(err)
-			} else {
-				if exist {
-					layer2AssignedNodeName, err := l.getEIPAnnouncer(a.(*arpAnnouncer), eip)
-					if err != nil {
-						klog.Warning(err)
-					}
-					if layer2AssignedNodeName != "" {
-						if _, exist := member[layer2AssignedNodeName]; exist {
-							nodes = append(nodes, layer2AssignedNodeName)
-						} else {
-							klog.Warningf("The assigned node: %s doesn't exist", layer2AssignedNodeName)
-						}
-					}
+			}
+
+			if layer2AssignedNodeName != "" {
+				if _, exist := member[layer2AssignedNodeName]; exist {
+					nodes = append(nodes, layer2AssignedNodeName)
 				} else {
-					for _, n := range clusterNodes {
-						if _, exist := member[n.GetName()]; exist {
-							nodes = append(nodes, n.GetName())
-						}
-					}
-
-					if len(nodes) == 0 {
-						klog.Warningf("no suitable nodes to participate in the announced election.")
-						return nil
-					}
-
-					klog.Infof("candidates: [%s]", strings.Join(nodes, ","))
-					// Sort the slice by the hash of node + load balancer ips. This
-					// produces an ordering of ready nodes that is unique to all the services
-					// with the same ip.
-					sort.Slice(nodes, func(i, j int) bool {
-						hi := sha256.Sum256([]byte(nodes[i] + "#" + ip))
-						hj := sha256.Sum256([]byte(nodes[j] + "#" + ip))
-
-						return bytes.Compare(hi[:], hj[:]) < 0
-					})
+					klog.Warningf("The assigned node: %s doesn't exist", layer2AssignedNodeName)
 				}
+			} else {
+				for _, n := range clusterNodes {
+					if _, exist := member[n.GetName()]; exist {
+						nodes = append(nodes, n.GetName())
+					}
+				}
+
+				if len(nodes) == 0 {
+					klog.Warningf("no suitable nodes to participate in the announced election.")
+					return nil
+				}
+
+				klog.Infof("candidates: [%s]", strings.Join(nodes, ","))
+				// Sort the slice by the hash of node + load balancer ips. This
+				// produces an ordering of ready nodes that is unique to all the services
+				// with the same ip.
+				sort.Slice(nodes, func(i, j int) bool {
+					hi := sha256.Sum256([]byte(nodes[i] + "#" + ip))
+					hj := sha256.Sum256([]byte(nodes[j] + "#" + ip))
+
+					return bytes.Compare(hi[:], hj[:]) < 0
+				})
 			}
 
 			if len(nodes) > 0 {
@@ -247,48 +242,44 @@ func (l *layer2Speaker) unregisterAllAnnouncers() {
 	l.announcers = map[string]Announcer{}
 }
 
-func (l *layer2Speaker) isEIPAnnounerExist(ip string) (bool, v1alpha2.Eip, error) {
+func (l *layer2Speaker) getEIPAnnouncer(announcer *arpAnnouncer, ip string) (string, error) {
+
 	eipList := &v1alpha2.EipList{}
 	err := l.client.RESTClient().Get().AbsPath("/apis/network.kubesphere.io/v1alpha2/eips").Do(context.Background()).Into(eipList)
 	if err != nil {
-		return false, v1alpha2.Eip{}, err
+		return "", err
 	}
 
 	for _, eip := range eipList.Items {
 		addr, err := iprange.ParseRange(eip.Spec.Address)
 		if err != nil {
-			return false, v1alpha2.Eip{}, err
+			return "", err
 		}
-		if addr.Contains(net.ParseIP(ip)) {
-			if _, exist := eip.Labels[nodeKey]; exist {
-				return true, eip, nil
-			} else if _, exist := eip.Annotations[macKey]; exist {
-				return true, eip, nil
-			} else if _, exist := eip.Labels[ipKey]; exist {
-				return true, eip, nil
-			}
-		}
-	}
-	return false, v1alpha2.Eip{}, nil
-}
 
-func (l *layer2Speaker) getEIPAnnouncer(announcer *arpAnnouncer, eip v1alpha2.Eip) (string, error) {
-	if layer2AnnouncerNode, exist := eip.Labels[nodeKey]; exist {
-		klog.Infof("EIP %s is: %s", nodeKey, layer2AnnouncerNode)
-		return layer2AnnouncerNode, nil
-	} else if layer2AnnouncerMAC, exist := eip.Annotations[macKey]; exist {
-		klog.Infof("EIP %s is: %s", macKey, layer2AnnouncerMAC)
-		assignedMac, err := net.ParseMAC(layer2AnnouncerMAC)
-		if err != nil {
-			return "", fmt.Errorf("invalid MAC address: %s", layer2AnnouncerMAC)
-		}
-		if bytes.Equal(announcer.intf.HardwareAddr, assignedMac) {
-			return util.GetNodeName(), nil
-		}
-	} else if layer2AnnouncerIP, exist := eip.Labels[ipKey]; exist {
-		klog.Infof("EIP %s is %s", ipKey, layer2AnnouncerIP)
-		if len(announcer.addrs) > 0 && announcer.addrs[0].IPNet.IP.String() == layer2AnnouncerIP {
-			return util.GetNodeName(), nil
+		if addr.Contains(net.ParseIP(ip)) {
+			// Node
+			if layer2AnnouncerNode, exist := eip.Labels[nodeKey]; exist {
+				klog.Infof("EIP %s is: %s", nodeKey, layer2AnnouncerNode)
+				return layer2AnnouncerNode, nil
+			}
+			// MAC
+			if layer2AnnouncerMAC, exist := eip.Annotations[macKey]; exist {
+				klog.Infof("EIP %s is: %s", macKey, layer2AnnouncerMAC)
+				assignedMac, err := net.ParseMAC(layer2AnnouncerMAC)
+				if err != nil {
+					return "", fmt.Errorf("invalid MAC address: %s", layer2AnnouncerMAC)
+				}
+				if bytes.Equal(announcer.intf.HardwareAddr, assignedMac) {
+					return util.GetNodeName(), nil
+				}
+			}
+			// IP
+			if layer2AnnouncerIP, exist := eip.Labels[ipKey]; exist {
+				klog.Infof("EIP %s is %s", ipKey, layer2AnnouncerIP)
+				if len(announcer.addrs) > 0 && announcer.addrs[0].IPNet.IP.String() == layer2AnnouncerIP {
+					return util.GetNodeName(), nil
+				}
+			}
 		}
 	}
 
