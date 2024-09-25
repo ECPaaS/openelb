@@ -32,6 +32,8 @@ const (
 	ipKey   = "layer2AnnouncerIP"
 )
 
+var hasAnnouncerInfo bool
+
 func NewSpeaker(client *kubernetes.Clientset, opt *Options, reloadChan chan event.GenericEvent) (speaker.Speaker, error) {
 	config := memberlist.DefaultLANConfig()
 	config.Name = opt.NodeName
@@ -94,18 +96,19 @@ func (l *layer2Speaker) SetBalancer(ip string, clusterNodes []corev1.Node) error
 			}
 
 			nodes := []string{}
-
+			hasAnnouncerInfo := false
 			layer2AssignedNodeName, err := l.getEIPAnnouncer(a.(*arpAnnouncer), ip)
 			if err != nil {
 				klog.Warning(err)
 			}
 
-			if layer2AssignedNodeName != "" {
-				if _, exist := member[layer2AssignedNodeName]; exist {
-					nodes = append(nodes, layer2AssignedNodeName)
-				} else {
-					klog.Warningf("The assigned node: %s doesn't exist", layer2AssignedNodeName)
-				}
+			if hasAnnouncerInfo {
+				if layer2AssignedNodeName != "" {
+					if _, exist := member[layer2AssignedNodeName]; exist {
+						nodes = append(nodes, layer2AssignedNodeName)
+					} else {
+						klog.Warningf("The assigned node: %s doesn't exist", layer2AssignedNodeName)
+					}
 			} else {
 				for _, n := range clusterNodes {
 					if _, exist := member[n.GetName()]; exist {
@@ -259,11 +262,13 @@ func (l *layer2Speaker) getEIPAnnouncer(announcer *arpAnnouncer, ip string) (str
 		if addr.Contains(net.ParseIP(ip)) {
 			// Node
 			if layer2AnnouncerNode, exist := eip.Labels[nodeKey]; exist {
+				hasAnnouncerInfo = true
 				klog.Infof("EIP %s is: %s", nodeKey, layer2AnnouncerNode)
 				return layer2AnnouncerNode, nil
 			}
 			// MAC
 			if layer2AnnouncerMAC, exist := eip.Annotations[macKey]; exist {
+				hasAnnouncerInfo = true
 				klog.Infof("EIP %s is: %s", macKey, layer2AnnouncerMAC)
 				assignedMac, err := net.ParseMAC(layer2AnnouncerMAC)
 				if err != nil {
@@ -272,14 +277,17 @@ func (l *layer2Speaker) getEIPAnnouncer(announcer *arpAnnouncer, ip string) (str
 				if bytes.Equal(announcer.intf.HardwareAddr, assignedMac) {
 					return util.GetNodeName(), nil
 				}
+
 			}
 			// IP
 			if layer2AnnouncerIP, exist := eip.Labels[ipKey]; exist {
+				hasAnnouncerInfo = true
 				klog.Infof("EIP %s is %s", ipKey, layer2AnnouncerIP)
 				if len(announcer.addrs) > 0 && announcer.addrs[0].IPNet.IP.String() == layer2AnnouncerIP {
 					return util.GetNodeName(), nil
 				}
 			}
+
 		}
 	}
 
