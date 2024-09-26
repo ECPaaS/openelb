@@ -96,7 +96,7 @@ func (l *layer2Speaker) SetBalancer(ip string, clusterNodes []corev1.Node) error
 			}
 
 			nodes := []string{}
-			hasAnnouncerInfo := false
+			hasAnnouncerInfo = false
 			layer2AssignedNodeName, err := l.getEIPAnnouncer(a.(*arpAnnouncer), ip)
 			if err != nil {
 				klog.Warning(err)
@@ -109,6 +109,7 @@ func (l *layer2Speaker) SetBalancer(ip string, clusterNodes []corev1.Node) error
 					} else {
 						klog.Warningf("The assigned node: %s doesn't exist", layer2AssignedNodeName)
 					}
+				}
 			} else {
 				for _, n := range clusterNodes {
 					if _, exist := member[n.GetName()]; exist {
@@ -269,23 +270,25 @@ func (l *layer2Speaker) getEIPAnnouncer(announcer *arpAnnouncer, ip string) (str
 			// MAC
 			if layer2AnnouncerMAC, exist := eip.Annotations[macKey]; exist {
 				hasAnnouncerInfo = true
-				klog.Infof("EIP %s is: %s", macKey, layer2AnnouncerMAC)
 				assignedMac, err := net.ParseMAC(layer2AnnouncerMAC)
 				if err != nil {
-					return "", fmt.Errorf("invalid MAC address: %s", layer2AnnouncerMAC)
+					return "", fmt.Errorf("invalid EIP announcer MAC address: %s", layer2AnnouncerMAC)
 				}
 				if bytes.Equal(announcer.intf.HardwareAddr, assignedMac) {
+					klog.Infof("EIP %s is: %s", macKey, layer2AnnouncerMAC)
 					return util.GetNodeName(), nil
 				}
-
+				klog.Infof("EIP %s (%s) is not the same as this node's (%s)", macKey, layer2AnnouncerMAC, announcer.intf.HardwareAddr)
 			}
 			// IP
 			if layer2AnnouncerIP, exist := eip.Labels[ipKey]; exist {
 				hasAnnouncerInfo = true
-				klog.Infof("EIP %s is %s", ipKey, layer2AnnouncerIP)
+				// Check if the interface has any IP set
 				if len(announcer.addrs) > 0 && announcer.addrs[0].IPNet.IP.String() == layer2AnnouncerIP {
+					klog.Infof("EIP %s is %s", ipKey, layer2AnnouncerIP)
 					return util.GetNodeName(), nil
 				}
+				klog.Infof("EIP %s (%s) is not the same as this node's", ipKey, layer2AnnouncerIP)
 			}
 
 		}
