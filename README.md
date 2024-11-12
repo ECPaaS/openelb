@@ -45,6 +45,46 @@ In cloud-based Kubernetes clusters, Services are usually exposed by using load b
 
 You can learn how to use OpenELB in a cloud-based Kubernetes cluster by following the [OpenELB Documentation](https://openelb.io/docs/).
 
+## Assign layer2 announcer
+There are three ways to assign the specific layer2 announcer by configuring EIP resources.
+
+1.  Assign the Node Name by labels.layer2AnnouncerNode
+  ```
+labels:
+      layer2AnnouncerNode: pc2
+```
+2. Assign the Node MAC address by annotations.layer2AnnouncerMAC
+```
+annotations:
+      layer2AnnouncerMAC: "00:00:00:00:00:00"
+```
+3. Assign the Node IP by labels.layer2AnnouncerIP
+```
+labels:
+     layer2AnnouncerIP: 10.10.30.3
+```
+Example:
+```
+apiVersion: network.kubesphere.io/v1alpha2
+kind: Eip
+metadata:
+  name: eip-sample-layer2-announcer
+  # 1. Assign the Node Name
+  labels:
+      layer2AnnouncerNode: pc2
+  # 2. Assign the Node MAC address
+  # annotations:
+  #     layer2AnnouncerMAC: "00:00:00:00:00:00"
+  # 3. Assign the Node IP
+  # labels:
+  #     layer2AnnouncerIP: 10.10.30.3
+spec:
+  address: 10.10.30.13-10.10.30.14
+  protocol: layer2
+  #The interface must be specified when the protocol is layer2.
+  interface: eth0
+```
+
 ## Adopters
 
 OpenELB has been adopted by [many companies](./ADOPTERS.md) all over the world. If you are using OpenELB in your organization, welcome to join the end user community and add your logo to the [list](./ADOPTERS.md)!
